@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>10k Swings – Neon v5.1</title>
+<title>10k Swings – Neon v5.2</title>
 <style>
 :root{
   --bg:#0b0d10; --surface:#0f1318; --ink:#e5e7eb; --muted:#9aa3af;
@@ -79,6 +79,16 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
 
 .btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:14px;padding:10px 14px;min-height:var(--tap);cursor:pointer}
 .btn:hover{border-color:var(--line-strong)}
+
+/* Verlauf-Karte */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px;display:grid;gap:10px}
+.topline{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.small{color:var(--muted);font-size:13px}
+canvas{display:block;width:100%;height:220px}
+.toggle{cursor:pointer;color:var(--accent);border:none;background:transparent;padding:6px 8px;border-radius:10px}
+.toggle:hover{background:color-mix(in srgb,var(--accent) 10%, transparent)}
+.stats{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:13px}
 </style>
 </head>
 <body>
@@ -141,6 +151,32 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
 <!-- Board -->
 <div class="board" id="board"></div>
 
+<!-- Verlauf integriert -->
+<div class="card" id="progressCard">
+  <div class="topline">
+    <div class="small">Verlauf (Gesamtzeit pro Tag)</div>
+    <div class="controls">
+      <select id="range">
+        <option value="14">Letzte 14</option>
+        <option value="7">Letzte 7</option>
+        <option value="30">Letzte 30</option>
+        <option value="all">Alle</option>
+      </select>
+      <select id="unit">
+        <option value="auto">Auto</option>
+        <option value="sec">Sekunden</option>
+        <option value="min">Minuten</option>
+      </select>
+      <button class="btn" id="exportBtn">CSV</button>
+      <button class="toggle" id="toggleView">▼</button>
+    </div>
+  </div>
+  <div id="progressBody">
+    <canvas id="chart" width="960" height="220"></canvas>
+    <div class="stats" id="stats">–</div>
+  </div>
+</div>
+
 <script>
 (function(){
   'use strict';
@@ -181,6 +217,7 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
     $$('.group.short .pbtn').forEach(x=>x.classList.remove('active'));
     b.classList.add('active');
     const v=parseInt(b.dataset.short,10); if(!isNaN(v)) pauseShort=v; autoSave();
+    setCD(pauseShort,null); // Ring-Start anpassen
   }));
   $$('.group.long .pbtn').forEach(b=>b.addEventListener('click',()=>{
     $$('.group.long .pbtn').forEach(x=>x.classList.remove('active'));
@@ -241,6 +278,8 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
     ptr = firstIncomplete();
     $('#nextBtn').textContent = labelFor(ptr);
     swRender();
+    // Verlauf live aktualisieren (z. B. nach Fertigstellung eines Tages)
+    progressRender();
   }
 
   /* Board */
@@ -289,7 +328,7 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
   $('#nextBtn').addEventListener('click', ()=>{
     if(cdRunning) return;
 
-    // Erste Aktion des Tages? -> Stoppuhr starten
+    // Erste Aktion? -> Stoppuhr starten
     if(!swRunning){
       const anyDone = rounds.flat().some(b=>b.swDone||b.puDone);
       if(!anyDone) swStart();
@@ -358,14 +397,14 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
   });
 
   /* Storage per Tag inkl. Stoppuhr */
-  const skey = ()=>'kb_neon_v5_1_day_'+(day.value||'X');
+  const skey = ()=>'kb_neon_v5_2_day_'+(day.value||'X');
   const collect = ()=>({
     day:day.value||'', date:date.value||'',
     rounds, pauseShort, pauseLong,
     sw:{ running:swRunning, base:swRunning ? (Date.now()-swStartTs + swBase) : swBase, startedAt: swRunning ? swStartTs : null }
   });
   function fill(d){
-    if(!d){ resetAll(); return; } // neu: wenn keine Daten -> kompletter Reset
+    if(!d){ resetAll(); return; }
     if(d.day) day.value=d.day;
     date.value=d.date||'';
     if(Array.isArray(d.rounds) && d.rounds.length===5){
@@ -399,14 +438,173 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
   function load(){
     const raw = safeGet(skey());
     if(raw){ try{ fill(JSON.parse(raw)); }catch(e){ resetAll(); } }
-    else { resetAll(); } // <<< NEU: kein Storage -> frischer Tag
+    else { resetAll(); } // kein Storage -> frischer Tag
   }
   function autoSave(){ try{ save(); }catch(e){} }
+
+  // ====== Verlauf (integriert) ======
+  const KEY_PREFIXES = [
+    'kb_neon_v5_2_day_',
+    'kb_neon_v5_1_day_',
+    'kb_neon_v5_day_',
+    'kb_neon_v4_day_',
+    'kb_neon_fix_day_',
+    'kb_neon_day_',
+    'kb_lr_day_',
+    'kb_safe_day_',
+  ];
+  const MAX_DAYS = 50;
+  const chart = $('#chart');
+  const statsEl = $('#stats');
+  const rangeSel = $('#range');
+  const unitSel  = $('#unit');
+  const exportBtn= $('#exportBtn');
+  const toggleBtn= $('#toggleView');
+  const progressBody = $('#progressBody');
+
+  function parseOne(prefix, dayNum){
+    const raw = safeGet(prefix + String(dayNum));
+    if(!raw) return null;
+    try{
+      const d = JSON.parse(raw);
+      let ms = 0;
+      if (d.sw && typeof d.sw.base === 'number') ms = Math.max(0, d.sw.base|0);
+      let done = false;
+      if (Array.isArray(d.rounds) && d.rounds.length===5){
+        const all = d.rounds.flat();
+        const sumSw = all.filter(b=>b && b.swDone).reduce((a,b)=>a+(b.sw||0),0);
+        const allPu = all.every(b=>b && b.puDone===true);
+        done = (sumSw>=500 && allPu);
+      }
+      const date = d.date || '';
+      return { day: Number(dayNum), date, ms, done, source: prefix };
+    }catch(e){ return null; }
+  }
+  function gather(){
+    const map = new Map();
+    for(let d=1; d<=MAX_DAYS; d++){
+      for(const p of KEY_PREFIXES){
+        const rec = parseOne(p, d);
+        if(rec){ map.set(d, rec); break; }
+      }
+    }
+    return Array.from(map.values()).sort((a,b)=>a.day-b.day);
+  }
+  function filterRange(data){
+    const v = rangeSel.value;
+    if(v==='all') return data;
+    const n = parseInt(v,10);
+    return data.slice(-n);
+  }
+  function fmtMS(ms, unit='auto'){
+    if(unit==='sec') return (ms/1000).toFixed(0)+' s';
+    if(unit==='min') return (ms/60000).toFixed(2)+' min';
+    const t=Math.floor(ms/1000), h=Math.floor(t/3600), m=Math.floor((t%3600)/60), s=t%60;
+    const pp = x=>x<10?'0'+x:x;
+    return (h? (pp(h)+':'):'') + pp(m)+':'+pp(s);
+  }
+  function computeStats(data){
+    if(!data.length) return {best:null, avg:null, last:null};
+    const ts = data.map(d=>d.ms).filter(x=>x>0);
+    if(!ts.length) return {best:null, avg:null, last:null};
+    const best = Math.min(...ts);
+    const avg  = ts.reduce((a,b)=>a+b,0)/ts.length;
+    const last = data[data.length-1].ms || null;
+    return {best, avg, last};
+  }
+  function draw(data){
+    if(!chart) return;
+    const ctx = chart.getContext('2d');
+    // DPR
+    const dpr = window.devicePixelRatio||1;
+    const rect = chart.getBoundingClientRect();
+    chart.width  = Math.max(600, Math.round(rect.width * dpr));
+    chart.height = Math.round(220 * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,chart.clientWidth,chart.clientHeight);
+
+    // colors
+    const ACCENT = getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#faff00';
+    const LINE   = getComputedStyle(document.documentElement).getPropertyValue('--line')   || '#2a3340';
+
+    const W = chart.clientWidth, H = chart.clientHeight;
+    const padL=36, padR=12, padT=8, padB=24;
+    const iw = W - padL - padR, ih = H - padT - padB;
+
+    // axes
+    ctx.strokeStyle = LINE; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,padT); ctx.lineTo(padL,padT+ih); ctx.lineTo(padL+iw,padT+ih); ctx.stroke();
+
+    const valid = data.filter(d=>d.ms>0);
+    if(!valid.length){
+      ctx.fillStyle = '#8a93a1';
+      ctx.fillText('Noch keine vollständigen Tage.', padL+6, padT+18);
+      return;
+    }
+    const msMin = Math.min(...valid.map(d=>d.ms));
+    const msMax = Math.max(...valid.map(d=>d.ms));
+    const yPad = (msMax-msMin)*0.1;
+    const yMin = Math.max(0, msMin - yPad), yMax = msMax + yPad;
+
+    const xStep = iw/Math.max(1,data.length-1);
+    const xAt = i=> padL + i*xStep;
+    const yAt = ms=> { const t=(ms - yMin)/(yMax-yMin||1); return padT + ih - t*ih; };
+
+    // grid
+    ctx.setLineDash([2,3]); ctx.strokeStyle = LINE;
+    for(let g=0; g<=3; g++){ const y = padT + ih*(g/3); ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+iw,y); ctx.stroke(); }
+    ctx.setLineDash([]);
+
+    // line
+    ctx.strokeStyle = ACCENT; ctx.lineWidth=2;
+    ctx.beginPath();
+    data.forEach((d,i)=>{ const x=xAt(i), y=yAt(d.ms||0); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });
+    ctx.stroke();
+
+    // points
+    ctx.fillStyle = ACCENT;
+    data.forEach((d,i)=>{ const x=xAt(i), y=yAt(d.ms||0); ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill(); });
+
+    // x labels sparsam
+    ctx.fillStyle = '#8a93a1'; ctx.font='12px system-ui';
+    const step = Math.max(1, Math.ceil(data.length/8));
+    data.forEach((d,i)=>{ if(i%step===0 || i===data.length-1){ ctx.fillText('T'+d.day, xAt(i)-10, padT+ih+16); } });
+  }
+  function progressRender(){
+    const data = filterRange(gather());
+    draw(data);
+    const {best, avg, last} = computeStats(data);
+    statsEl.textContent = data.length
+      ? `Einträge: ${data.length} · Ø: ${best==null?'–':fmtMS(avg, unitSel.value)} · Best: ${best==null?'–':fmtMS(best, unitSel.value)} · Letzte: ${last==null?'–':fmtMS(last, unitSel.value)}`
+      : 'Keine Einträge im gewählten Zeitraum';
+  }
+  rangeSel.addEventListener('change', progressRender);
+  unitSel .addEventListener('change', progressRender);
+  window.addEventListener('resize', progressRender);
+  exportBtn.addEventListener('click', ()=>{
+    const data = filterRange(gather());
+    const rows = [['Tag','Datum','Zeit (ms)','Zeit (lesbar)','Status']];
+    data.forEach(d=> rows.push([d.day, d.date||'', d.ms||0, d.ms?fmtMS(d.ms,'auto'):'', d.done?'fertig':'offen']));
+    const csv = rows.map(r=>r.map(v=>String(v).replace(/"/g,'""')).map(v=>`"${v}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const url  = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='zeiten.csv';
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  });
+  // Ein-/Ausklappen
+  let open = true;
+  toggleBtn.addEventListener('click', ()=>{
+    open = !open;
+    progressBody.style.display = open ? 'block' : 'none';
+    toggleBtn.textContent = open ? '▼' : '▲';
+  });
 
   // Init
   if(!day.value) day.value='1';
   setCD(pauseShort,null);
   load();
+  // Initialen Verlauf zeichnen
+  progressRender();
 })();
 </script>
 </body>
