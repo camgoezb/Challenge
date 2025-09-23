@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>10k Swings – Neon v5.1</title>
+<style>
+:root{
+  --bg:#0b0d10; --surface:#0f1318; --ink:#e5e7eb; --muted:#9aa3af;
+  --accent:#faff00;
+  --line: color-mix(in srgb, var(--accent) 35%, #1a212a);
+  --line-strong: color-mix(in srgb, var(--accent) 60%, #1a212a);
+  --side: clamp(72px,20vw,140px);
+  --dial: clamp(200px,44vw,260px);
+  --btn:  calc(var(--dial)*0.70);
+  --tap: 44px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font:16px -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,system-ui,sans-serif;
+  letter-spacing:.01em;
+  padding:12px; display:grid; gap:12px; max-width:880px; margin-inline:auto;
+}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+select,input,button{font:inherit}
+select,input{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:14px;padding:10px 12px;min-height:var(--tap)}
+select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Stoppuhr (oben klein) */
+.stopwatch{
+  margin-left:auto; display:flex; align-items:center; gap:8px;
+  background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:8px 12px
+}
+.sw-dot{width:8px;height:8px;border-radius:50%;background:#555}
+.sw-dot.on{background:var(--accent); box-shadow:0 0 8px var(--accent)}
+.sw-time{font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.sw-btn{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:12px;padding:6px 10px;cursor:pointer}
+
+/* Layout: links (lang) | Mitte (Kreis) | rechts (kurz) – auch mobil nebeneinander */
+.dialWrap{display:grid;grid-template-columns:var(--side) var(--dial) var(--side);gap:12px;align-items:center;justify-content:center}
+
+/* Dial + Button */
+.dial{position:relative;width:var(--dial);height:var(--dial);display:grid;place-items:center}
+.dial svg{position:absolute;inset:0;transform:rotate(-90deg);z-index:1;pointer-events:none;color:var(--accent)}
+.ring-bg{stroke:color-mix(in srgb,var(--accent) 12%,#11161c)}
+#arc{transition:stroke-dashoffset .2s linear}
+
+.bigBtn{
+  position:relative;z-index:3;width:var(--btn);height:var(--btn);border:none;border-radius:50%;
+  background:var(--accent);color:#0b0d10;font-weight:800;font-size:clamp(16px,3.6vw,18px);
+  line-height:1.15;text-align:center;padding:0 14px;display:grid;place-items:center;cursor:pointer;
+  box-shadow:0 10px 24px rgba(250,255,0,.08),inset 0 0 0 1px rgba(0,0,0,.08);
+  -webkit-user-select:none;user-select:none;touch-action:manipulation
+}
+.bigBtn:disabled{background:#2a2f38;color:#8a93a1;cursor:not-allowed;box-shadow:inset 0 0 0 1px #333942}
+
+/* Seiten – Pausen */
+.side{display:grid;gap:10px;justify-items:stretch}
+.group{display:grid;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:10px}
+.label{font-size:12px;color:var(--muted);text-align:center;letter-spacing:.04em}
+.pbtn{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:12px;padding:10px 8px;cursor:pointer;min-height:var(--tap);transition:border-color .15s,color .15s,background .15s}
+.pbtn:hover{border-color:var(--line-strong)}
+.pbtn.active{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+
+/* Progress + Board */
+.bar{height:8px;background:color-mix(in srgb,var(--accent) 10%,#121820);border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.bar>span{display:block;height:100%;background:var(--accent);width:0%;transition:width .25s ease}
+#totalText{text-align:center;color:var(--muted);font-size:13px}
+
+.board{display:grid;gap:10px}
+.rowb{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.cell{display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--line);background:var(--surface);border-radius:16px;padding:10px}
+.big{width:58px;height:58px;border-radius:50%;border:1px solid var(--line);background:#0c1117;color:var(--ink);display:grid;place-items:center;font-weight:700;cursor:pointer;box-shadow:inset 0 0 0 1px #0e141c}
+.big.done{background:var(--accent);color:#0b0d10;border-color:var(--accent);box-shadow:none}
+.dot{width:16px;height:16px;border-radius:50%;border:1px solid var(--line);background:#0c1117;cursor:pointer}
+.dot.done{background:var(--accent);border-color:var(--accent)}
+
+.btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:14px;padding:10px 14px;min-height:var(--tap);cursor:pointer}
+.btn:hover{border-color:var(--line-strong)}
+</style>
+</head>
+<body>
+
+<!-- Meta + Stoppuhr -->
+<div class="row">
+  <select id="day"><option value="">Tag</option></select>
+  <input type="date" id="date">
+  <div class="stopwatch" title="Gesamtzeit des Trainings">
+    <div class="sw-dot" id="swDot" aria-hidden="true"></div>
+    <div class="sw-time" id="swTime">00:00:00</div>
+    <button class="sw-btn" id="swReset" title="Stoppuhr zurücksetzen">⟲</button>
+  </div>
+</div>
+
+<!-- Links (lang) | Kreis | Rechts (kurz) -->
+<div class="dialWrap">
+  <div class="side left">
+    <div class="group long">
+      <div class="label">Lang</div>
+      <button class="pbtn" data-long="120">2:00</button>
+      <button class="pbtn active" data-long="180">3:00</button>
+      <button class="pbtn" data-long="240">4:00</button>
+    </div>
+  </div>
+
+  <div class="dial">
+    <svg viewBox="0 0 240 240" aria-hidden="true">
+      <circle class="ring-bg" cx="120" cy="120" r="104" fill="none" stroke-width="12"></circle>
+      <circle id="arc" cx="120" cy="120" r="104" fill="none" stroke="currentColor" stroke-width="12"
+              stroke-linecap="round" stroke-dasharray="653.45" stroke-dashoffset="653.45"></circle>
+    </svg>
+    <button class="bigBtn" id="nextBtn" type="button">Start</button>
+  </div>
+
+  <div class="side right">
+    <div class="group short">
+      <div class="label">Kurz</div>
+      <button class="pbtn active" data-short="20">20s</button>
+      <button class="pbtn" data-short="30">30s</button>
+      <button class="pbtn" data-short="45">45s</button>
+      <button class="pbtn" data-short="60">60s</button>
+    </div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="row" style="justify-content:center">
+  <button class="btn" id="backBtn">Zurück</button>
+  <button class="btn" id="skipBtn">Skip</button>
+  <button class="btn" id="resetRoundBtn">Runde</button>
+  <button class="btn" id="saveBtn">Save</button>
+  <button class="btn" id="loadBtn">Load</button>
+</div>
+
+<!-- Progress -->
+<div class="bar"><span id="prog"></span></div>
+<div id="totalText">0 / 500</div>
+
+<!-- Board -->
+<div class="board" id="board"></div>
+
+<script>
+(function(){
+  'use strict';
+  const $  = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+  const pad= n => n<10 ? '0'+n : ''+n;
+
+  /* Safe localStorage */
+  let storageOK=true; try{ localStorage.setItem('__t','1'); localStorage.removeItem('__t'); }catch(e){ storageOK=false; }
+  const safeGet = k => storageOK ? localStorage.getItem(k) : null;
+  const safeSet = (k,v) => { if(!storageOK) return; try{ localStorage.setItem(k,v); }catch(e){} };
+
+  /* Meta */
+  const day = $('#day'), date = $('#date');
+  for(let i=1;i<=20;i++){ const o=document.createElement('option'); o.value=String(i); o.textContent='Tag '+i; day.appendChild(o); }
+  day.addEventListener('change', ()=>{ load(); });
+  date.addEventListener('change', autoSave);
+
+  /* Model */
+  const SW=[10,15,25,50], PU={10:2,15:3,25:5,50:10}, TOTAL=500;
+  let rounds = Array.from({length:5},()=>SW.map(sw=>({sw,pu:PU[sw],swDone:false,puDone:false})));
+  let ptr={r:0,c:0,phase:'sw'};
+  let pauseShort=20, pauseLong=180;
+
+  /* Stoppuhr */
+  const swDot = $('#swDot'), swTime = $('#swTime'), swReset = $('#swReset');
+  let swRunning=false, swStartTs=null, swBase=0, swTimer=null;
+  const fmtHMS = ms => { const t=Math.floor(ms/1000), h=Math.floor(t/3600), m=Math.floor((t%3600)/60), s=t%60; return `${pad(h)}:${pad(m)}:${pad(s)}`; };
+  function swRender(){ const now = swRunning ? (Date.now()-swStartTs + swBase) : swBase; swTime.textContent = fmtHMS(now); swDot.classList.toggle('on', swRunning); }
+  function swTick(){ swRender(); }
+  function swStart(){ if(swRunning) return; swRunning=true; swStartTs=Date.now(); clearInterval(swTimer); swTimer=setInterval(swTick,1000); swRender(); autoSave(); }
+  function swStop(){ if(!swRunning) return; swBase = Date.now()-swStartTs + swBase; swRunning=false; clearInterval(swTimer); swTimer=null; swRender(); autoSave(); }
+  function swHardReset(){ swRunning=false; swStartTs=null; swBase=0; clearInterval(swTimer); swTimer=null; swRender(); autoSave(); }
+  swReset.addEventListener('click', swHardReset);
+
+  /* Pausenwahl */
+  $$('.group.short .pbtn').forEach(b=>b.addEventListener('click',()=>{
+    $$('.group.short .pbtn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    const v=parseInt(b.dataset.short,10); if(!isNaN(v)) pauseShort=v; autoSave();
+  }));
+  $$('.group.long .pbtn').forEach(b=>b.addEventListener('click',()=>{
+    $$('.group.long .pbtn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    const v=parseInt(b.dataset.long,10); if(!isNaN(v)) pauseLong=v; autoSave();
+  }));
+
+  /* Helpers */
+  const sumSw = () => rounds.flat().filter(b=>b.swDone).reduce((a,b)=>a+b.sw,0);
+  function firstIncomplete(){
+    for(let r=0;r<5;r++){
+      for(let c=0;c<4;c++){
+        const b=rounds[r][c];
+        if(!b.swDone) return {r,c,phase:'sw'};
+        if(!b.puDone) return {r,c,phase:'pu'};
+      }
+    }
+    return {r:4,c:3,phase:'rest'};
+  }
+  function nextBlock(){ if(ptr.c<3) ptr.c++; else { ptr.c=0; ptr.r=Math.min(4,ptr.r+1); } ptr.phase='sw'; }
+  const doneAll = () => sumSw()>=TOTAL && rounds.flat().every(b=>b.puDone);
+
+  /* Countdown (Ring) */
+  const arc = $('#arc'), CIRC = 2*Math.PI*104;
+  let cdLeft=30, cdTotal=30, cdTimer=null, cdRunning=false, cdOnEnd=null;
+  const setProg = f => arc.style.strokeDashoffset = (CIRC*(1-Math.max(0,Math.min(1,f)))).toFixed(2);
+  const renderCD = () => setProg((cdTotal-cdLeft)/cdTotal);
+  const fmt = sec => `${Math.floor(sec/60)}:${pad(sec%60)}`;
+  function setCD(sec, cb){ cdTotal=Math.max(1,sec|0); cdLeft=cdTotal; cdOnEnd=(typeof cb==='function')?cb:null; renderCD(); }
+  function startCD(){ if(cdRunning) return; cdRunning=true; clearInterval(cdTimer); cdTimer=setInterval(tick,1000); }
+  function pauseCD(){ cdRunning=false; clearInterval(cdTimer); }
+  function tick(){
+    if(cdLeft>0) cdLeft--;
+    renderCD();
+    if(cdLeft<=0){
+      pauseCD();
+      if(cdOnEnd){ const f=cdOnEnd; cdOnEnd=null; try{ f(); }catch(e){} }
+      $('#nextBtn').disabled=false;
+      update();
+    }else{
+      $('#nextBtn').textContent = `Pause ${fmt(cdLeft)}`;
+    }
+  }
+
+  /* UI */
+  function labelFor(p){
+    if(doneAll()) return 'Fertig!';
+    if(p.phase==='sw') return `${rounds[p.r][p.c].sw} Swings`;
+    if(p.phase==='pu') return `${rounds[p.r][p.c].pu} Liegestütze`;
+    if(p.phase==='rest') return `Pause ${fmt(cdLeft)}`;
+    return 'Weiter';
+  }
+  function update(){
+    renderBoard();
+    const sum = sumSw();
+    $('#totalText').textContent = `${sum} / ${TOTAL}`;
+    $('#prog').style.width = `${Math.min(100,(sum/TOTAL)*100)}%`;
+    ptr = firstIncomplete();
+    $('#nextBtn').textContent = labelFor(ptr);
+    swRender();
+  }
+
+  /* Board */
+  const board = $('#board');
+  function renderBoard(){
+    board.innerHTML='';
+    rounds.forEach((blocks,r)=>{
+      const row=document.createElement('div'); row.className='rowb';
+      blocks.forEach((b,c)=>{
+        const cell=document.createElement('div'); cell.className='cell';
+        cell.innerHTML = `
+          <button class="big ${b.swDone?'done':''}" data-r="${r}" data-c="${c}" data-t="sw">${b.sw}</button>
+          <button class="dot ${b.puDone?'done':''}" data-r="${r}" data-c="${c}" data-t="pu" title="${b.pu} PU"></button>`;
+        row.appendChild(cell);
+      });
+      board.appendChild(row);
+    });
+    $$('#board .big, #board .dot').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const r=+btn.dataset.r, c=+btn.dataset.c, t=btn.dataset.t;
+        if(t==='sw') rounds[r][c].swDone=!rounds[r][c].swDone;
+        else rounds[r][c].puDone=!rounds[r][c].puDone;
+        ptr = firstIncomplete();
+        update(); autoSave();
+      });
+    });
+  }
+
+  /* Voll-Reset für neuen/ungenutzten Tag */
+  function resetAll(){
+    rounds = Array.from({length:5},()=>SW.map(sw=>({sw,pu:PU[sw],swDone:false,puDone:false})));
+    ptr={r:0,c:0,phase:'sw'};
+    pauseShort=20; pauseLong=180;
+    swHardReset();
+    $$('.group.short .pbtn').forEach(x=>x.classList.remove('active'));
+    $$('.group.long  .pbtn').forEach(x=>x.classList.remove('active'));
+    const d20 = document.querySelector('.group.short .pbtn[data-short="20"]');
+    const d180= document.querySelector('.group.long  .pbtn[data-long="180"]');
+    if(d20) d20.classList.add('active');
+    if(d180) d180.classList.add('active');
+    setCD(pauseShort,null);
+    update();
+  }
+
+  /* Next Button – inkl. Stoppuhr-Start/Stop & lange Pause nach 10 PU */
+  $('#nextBtn').addEventListener('click', ()=>{
+    if(cdRunning) return;
+
+    // Erste Aktion des Tages? -> Stoppuhr starten
+    if(!swRunning){
+      const anyDone = rounds.flat().some(b=>b.swDone||b.puDone);
+      if(!anyDone) swStart();
+    }
+
+    ptr = firstIncomplete();
+    const b = rounds[ptr.r][ptr.c];
+
+    if(ptr.phase==='sw'){
+      b.swDone = true;
+      ptr = firstIncomplete();   // jetzt PU
+      update(); autoSave();
+      return;
+    }
+
+    if(ptr.phase==='pu'){
+      b.puDone = true;
+
+      // Fertig? -> Stoppuhr stoppen, keine Pause mehr
+      if(doneAll()){
+        swStop();
+        update(); autoSave();
+        return;
+      }
+
+      // Pause (lang bei 10 PU, sonst kurz)
+      const rest = (b.pu === 10) ? pauseLong : pauseShort;
+      ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
+      $('#nextBtn').textContent = `Pause ${fmt(rest)}`;
+      $('#nextBtn').disabled = true;
+      setCD(rest, ()=>{
+        nextBlock();
+        $('#nextBtn').disabled = false;
+        update(); autoSave();
+      });
+      startCD();
+      autoSave();
+      return;
+    }
+  });
+
+  /* Navigation */
+  $('#backBtn').addEventListener('click', ()=>{
+    for(let r=4;r>=0;r--){
+      for(let c=3;c>=0;c--){
+        const b=rounds[r][c];
+        if(b.puDone){ b.puDone=false; ptr={r,c,phase:'pu'}; update(); autoSave(); return; }
+        if(b.swDone){ b.swDone=false; ptr={r,c,phase:'sw'}; update(); autoSave(); return; }
+      }
+    }
+  });
+  $('#skipBtn').addEventListener('click', ()=>{
+    if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; nextBlock(); update(); autoSave(); return; }
+    ptr = firstIncomplete();
+    if(ptr.phase==='sw') ptr.phase='pu';
+    else if(ptr.phase==='pu') ptr.phase='rest';
+    else nextBlock();
+    update(); autoSave();
+  });
+  $('#resetRoundBtn').addEventListener('click', ()=>{
+    const p=firstIncomplete(), r=p.r;
+    rounds[r].forEach(b=>{ b.swDone=false; b.puDone=false; });
+    pauseCD(); $('#nextBtn').disabled=false; setCD(pauseShort,null);
+    ptr = {r, c:0, phase:'sw'};
+    update(); autoSave();
+  });
+
+  /* Storage per Tag inkl. Stoppuhr */
+  const skey = ()=>'kb_neon_v5_1_day_'+(day.value||'X');
+  const collect = ()=>({
+    day:day.value||'', date:date.value||'',
+    rounds, pauseShort, pauseLong,
+    sw:{ running:swRunning, base:swRunning ? (Date.now()-swStartTs + swBase) : swBase, startedAt: swRunning ? swStartTs : null }
+  });
+  function fill(d){
+    if(!d){ resetAll(); return; } // neu: wenn keine Daten -> kompletter Reset
+    if(d.day) day.value=d.day;
+    date.value=d.date||'';
+    if(Array.isArray(d.rounds) && d.rounds.length===5){
+      rounds=d.rounds.map(row=>row.map(b=>({sw:b.sw,pu:b.pu,swDone:!!b.swDone,puDone:!!b.puDone})));
+    }
+    if(typeof d.pauseShort==='number') pauseShort=d.pauseShort;
+    if(typeof d.pauseLong==='number')  pauseLong=d.pauseLong;
+    // Pausen UI aktiv
+    $$('.group.short .pbtn').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.short,10)===pauseShort));
+    $$('.group.long  .pbtn').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.long,10)===pauseLong));
+
+    // Stoppuhr wiederherstellen
+    if(d.sw){
+      swBase = Math.max(0, parseInt(d.sw.base||0,10));
+      swRunning = !!d.sw.running;
+      if(swRunning){
+        swStartTs = Date.now();
+        clearInterval(swTimer); swTimer=setInterval(swTick,1000);
+      }else{
+        swStartTs = null; clearInterval(swTimer); swTimer=null;
+      }
+      swRender();
+    }else{
+      swHardReset();
+    }
+
+    setCD(pauseShort,null);
+    update();
+  }
+  function save(){ safeSet(skey(), JSON.stringify(collect())); }
+  function load(){
+    const raw = safeGet(skey());
+    if(raw){ try{ fill(JSON.parse(raw)); }catch(e){ resetAll(); } }
+    else { resetAll(); } // <<< NEU: kein Storage -> frischer Tag
+  }
+  function autoSave(){ try{ save(); }catch(e){} }
+
+  // Init
+  if(!day.value) day.value='1';
+  setCD(pauseShort,null);
+  load();
+})();
+</script>
+</body>
+</html>
