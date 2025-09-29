@@ -198,7 +198,7 @@ canvas{display:block;width:100%;height:220px}
   /* Model */
   const SW=[10,15,25,50], PU={10:2,15:3,25:5,50:10}, TOTAL=500;
   let rounds = Array.from({length:5},()=>SW.map(sw=>({sw,pu:PU[sw],swDone:false,puDone:false})));
-  let ptr={r:0,c:0,phase:'sw'};
+  let ptr={r:0,c:0,phase:'sw'};   // 'sw' | 'pu' | 'rest'
   let pauseShort=20, pauseLong=180;
 
   /* Stoppuhr */
@@ -212,39 +212,12 @@ canvas{display:block;width:100%;height:220px}
   function swHardReset(){ swRunning=false; swStartTs=null; swBase=0; clearInterval(swTimer); swTimer=null; swRender(); autoSave(); }
   swReset.addEventListener('click', swHardReset);
 
-  /* Pausenwahl */
-  $$('.group.short .pbtn').forEach(b=>b.addEventListener('click',()=>{
-    $$('.group.short .pbtn').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    const v=parseInt(b.dataset.short,10); if(!isNaN(v)) pauseShort=v; autoSave();
-    setCD(pauseShort,null); // Ring-Start anpassen
-  }));
-  $$('.group.long .pbtn').forEach(b=>b.addEventListener('click',()=>{
-    $$('.group.long .pbtn').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    const v=parseInt(b.dataset.long,10); if(!isNaN(v)) pauseLong=v; autoSave();
-  }));
-
-  /* Helpers */
-  const sumSw = () => rounds.flat().filter(b=>b.swDone).reduce((a,b)=>a+b.sw,0);
-  function firstIncomplete(){
-    for(let r=0;r<5;r++){
-      for(let c=0;c<4;c++){
-        const b=rounds[r][c];
-        if(!b.swDone) return {r,c,phase:'sw'};
-        if(!b.puDone) return {r,c,phase:'pu'};
-      }
-    }
-    return {r:4,c:3,phase:'rest'};
-  }
-  function nextBlock(){ if(ptr.c<3) ptr.c++; else { ptr.c=0; ptr.r=Math.min(4,ptr.r+1); } ptr.phase='sw'; }
-  const doneAll = () => sumSw()>=TOTAL && rounds.flat().every(b=>b.puDone);
-
   /* Countdown (Ring) */
   const arc = $('#arc'), CIRC = 2*Math.PI*104;
-  let cdLeft=30, cdTotal=30, cdTimer=null, cdRunning=false, cdOnEnd=null;
-  const setProg = f => arc.style.strokeDashoffset = (CIRC*(1-Math.max(0,Math.min(1,f)))).toFixed(2);
-  const renderCD = () => setProg((cdTotal-cdLeft)/cdTotal);
+  let cdLeft=0, cdTotal=0, cdTimer=null, cdRunning=false, cdOnEnd=null;
+  let pendingRest=null; // Pausendauer, wenn 'rest' angezeigt, aber noch nicht gestartet
+  const setProg = f => arc.style.strokeDashoffset = (CIRC*(1-Math.max(0,Math.min(1,f||0)))).toFixed(2);
+  const renderCD = () => setProg(cdTotal ? (cdTotal-cdLeft)/cdTotal : 0);
   const fmt = sec => `${Math.floor(sec/60)}:${pad(sec%60)}`;
   function setCD(sec, cb){ cdTotal=Math.max(1,sec|0); cdLeft=cdTotal; cdOnEnd=(typeof cb==='function')?cb:null; renderCD(); }
   function startCD(){ if(cdRunning) return; cdRunning=true; clearInterval(cdTimer); cdTimer=setInterval(tick,1000); }
@@ -262,12 +235,40 @@ canvas{display:block;width:100%;height:220px}
     }
   }
 
+  /* Helpers */
+  const sumSw = () => rounds.flat().filter(b=>b.swDone).reduce((a,b)=>a+b.sw,0);
+  function firstIncomplete(){
+    for(let r=0;r<5;r++){
+      for(let c=0;c<4;c++){
+        const b=rounds[r][c];
+        if(!b.swDone) return {r,c,phase:'sw'};
+        if(!b.puDone) return {r,c,phase:'pu'};
+      }
+    }
+    return {r:4,c:3,phase:'rest'};
+  }
+  function nextBlock(){ if(ptr.c<3) ptr.c++; else { ptr.c=0; ptr.r=Math.min(4,ptr.r+1); } ptr.phase='sw'; pendingRest=null; }
+  const doneAll = () => sumSw()>=TOTAL && rounds.flat().every(b=>b.puDone);
+
+  /* Pausen-Auswahl */
+  $$('.group.short .pbtn').forEach(b=>b.addEventListener('click',()=>{
+    $$('.group.short .pbtn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    const v=parseInt(b.dataset.short,10); if(!isNaN(v)) pauseShort=v; autoSave();
+    if(!cdRunning && (ptr.phase!=='rest')) setCD(pauseShort,null);
+  }));
+  $$('.group.long .pbtn').forEach(b=>b.addEventListener('click',()=>{
+    $$('.group.long .pbtn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    const v=parseInt(b.dataset.long,10); if(!isNaN(v)) pauseLong=v; autoSave();
+  }));
+
   /* UI */
   function labelFor(p){
     if(doneAll()) return 'Fertig!';
-    if(p.phase==='sw') return `${rounds[p.r][p.c].sw} Swings`;
-    if(p.phase==='pu') return `${rounds[p.r][p.c].pu} Liegestütze`;
-    if(p.phase==='rest') return `Pause ${fmt(cdLeft)}`;
+    if(p.phase==='sw')  return `${rounds[p.r][p.c].sw} Swings`;
+    if(p.phase==='pu')  return `2.Übung`;
+    if(p.phase==='rest')return cdRunning ? `Pause ${fmt(cdLeft)}` : 'Pause starten';
     return 'Weiter';
   }
   function update(){
@@ -275,11 +276,11 @@ canvas{display:block;width:100%;height:220px}
     const sum = sumSw();
     $('#totalText').textContent = `${sum} / ${TOTAL}`;
     $('#prog').style.width = `${Math.min(100,(sum/TOTAL)*100)}%`;
-    ptr = firstIncomplete();
+    // ptr nur neu bestimmen, wenn keine „wartende“ Pause ansteht
+    if(!(ptr.phase==='rest' && !cdRunning)) ptr = firstIncomplete();
     $('#nextBtn').textContent = labelFor(ptr);
     swRender();
-    // Verlauf live aktualisieren (z. B. nach Fertigstellung eines Tages)
-    progressRender();
+    progressRender(); // Verlauf aktualisieren
   }
 
   /* Board */
@@ -292,7 +293,7 @@ canvas{display:block;width:100%;height:220px}
         const cell=document.createElement('div'); cell.className='cell';
         cell.innerHTML = `
           <button class="big ${b.swDone?'done':''}" data-r="${r}" data-c="${c}" data-t="sw">${b.sw}</button>
-          <button class="dot ${b.puDone?'done':''}" data-r="${r}" data-c="${c}" data-t="pu" title="${b.pu} PU"></button>`;
+          <button class="dot ${b.puDone?'done':''}" data-r="${r}" data-c="${c}" data-t="pu" title="2.Übung"></button>`;
         row.appendChild(cell);
       });
       board.appendChild(row);
@@ -302,62 +303,56 @@ canvas{display:block;width:100%;height:220px}
         const r=+btn.dataset.r, c=+btn.dataset.c, t=btn.dataset.t;
         if(t==='sw') rounds[r][c].swDone=!rounds[r][c].swDone;
         else rounds[r][c].puDone=!rounds[r][c].puDone;
+        // Wenn Board manuell ändert, evtl. wartende Pause löschen
+        if(ptr.phase==='rest' && !cdRunning) pendingRest=null;
         ptr = firstIncomplete();
         update(); autoSave();
       });
     });
   }
 
-  /* Voll-Reset für neuen/ungenutzten Tag */
-  function resetAll(){
-    rounds = Array.from({length:5},()=>SW.map(sw=>({sw,pu:PU[sw],swDone:false,puDone:false})));
-    ptr={r:0,c:0,phase:'sw'};
-    pauseShort=20; pauseLong=180;
-    swHardReset();
-    $$('.group.short .pbtn').forEach(x=>x.classList.remove('active'));
-    $$('.group.long  .pbtn').forEach(x=>x.classList.remove('active'));
-    const d20 = document.querySelector('.group.short .pbtn[data-short="20"]');
-    const d180= document.querySelector('.group.long  .pbtn[data-long="180"]');
-    if(d20) d20.classList.add('active');
-    if(d180) d180.classList.add('active');
-    setCD(pauseShort,null);
-    update();
-  }
-
-  /* Next Button – inkl. Stoppuhr-Start/Stop & lange Pause nach 10 PU */
+  /* Next-Button – 3-Klick-Flow + Stoppuhr-Start/Stop */
   $('#nextBtn').addEventListener('click', ()=>{
     if(cdRunning) return;
 
-    // Erste Aktion? -> Stoppuhr starten
+    // Erste Aktion -> Stoppuhr starten, falls noch gar nichts gemacht
     if(!swRunning){
       const anyDone = rounds.flat().some(b=>b.swDone||b.puDone);
       if(!anyDone) swStart();
     }
 
-    ptr = firstIncomplete();
-    const b = rounds[ptr.r][ptr.c];
-
+    // 1) Swings erledigen -> auf 2.Übung umschalten
     if(ptr.phase==='sw'){
+      const b = rounds[ptr.r][ptr.c];
       b.swDone = true;
-      ptr = firstIncomplete();   // jetzt PU
+      ptr = {r:ptr.r, c:ptr.c, phase:'pu'};
       update(); autoSave();
       return;
     }
 
+    // 2) 2.Übung erledigen -> „Pause starten“ zeigen (noch nicht laufen)
     if(ptr.phase==='pu'){
+      const b = rounds[ptr.r][ptr.c];
       b.puDone = true;
 
-      // Fertig? -> Stoppuhr stoppen, keine Pause mehr
+      // Fertig? -> Stoppuhr stoppen, kein Pause mehr
       if(doneAll()){
         swStop();
+        pendingRest=null;
         update(); autoSave();
         return;
       }
 
-      // Pause (lang bei 10 PU, sonst kurz)
-      const rest = (b.pu === 10) ? pauseLong : pauseShort;
+      pendingRest = (b.pu === 10) ? pauseLong : pauseShort;
       ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
-      $('#nextBtn').textContent = `Pause ${fmt(rest)}`;
+      $('#nextBtn').textContent = 'Pause starten';
+      autoSave();
+      return;
+    }
+
+    // 3) Pause starten -> Countdown im Ring, Button gesperrt
+    if(ptr.phase==='rest'){
+      const rest = pendingRest || pauseShort;
       $('#nextBtn').disabled = true;
       setCD(rest, ()=>{
         nextBlock();
@@ -365,33 +360,33 @@ canvas{display:block;width:100%;height:220px}
         update(); autoSave();
       });
       startCD();
-      autoSave();
+      update(); autoSave();
       return;
     }
   });
 
   /* Navigation */
   $('#backBtn').addEventListener('click', ()=>{
+    if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; }
     for(let r=4;r>=0;r--){
       for(let c=3;c>=0;c--){
         const b=rounds[r][c];
-        if(b.puDone){ b.puDone=false; ptr={r,c,phase:'pu'}; update(); autoSave(); return; }
-        if(b.swDone){ b.swDone=false; ptr={r,c,phase:'sw'}; update(); autoSave(); return; }
+        if(b.puDone){ b.puDone=false; pendingRest=null; ptr={r,c,phase:'pu'}; update(); autoSave(); return; }
+        if(b.swDone){ b.swDone=false; pendingRest=null; ptr={r,c,phase:'sw'}; update(); autoSave(); return; }
       }
     }
   });
   $('#skipBtn').addEventListener('click', ()=>{
-    if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; nextBlock(); update(); autoSave(); return; }
-    ptr = firstIncomplete();
+    if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; }
     if(ptr.phase==='sw') ptr.phase='pu';
-    else if(ptr.phase==='pu') ptr.phase='rest';
-    else nextBlock();
+    else if(ptr.phase==='pu'){ const b=rounds[ptr.r][ptr.c]; b.puDone=true; pendingRest=(b.pu===10)?pauseLong:pauseShort; ptr.phase='rest'; }
+    else { nextBlock(); }
     update(); autoSave();
   });
   $('#resetRoundBtn').addEventListener('click', ()=>{
     const p=firstIncomplete(), r=p.r;
     rounds[r].forEach(b=>{ b.swDone=false; b.puDone=false; });
-    pauseCD(); $('#nextBtn').disabled=false; setCD(pauseShort,null);
+    pauseCD(); $('#nextBtn').disabled=false; setCD(0,null); pendingRest=null;
     ptr = {r, c:0, phase:'sw'};
     update(); autoSave();
   });
@@ -401,44 +396,60 @@ canvas{display:block;width:100%;height:220px}
   const collect = ()=>({
     day:day.value||'', date:date.value||'',
     rounds, pauseShort, pauseLong,
-    sw:{ running:swRunning, base:swRunning ? (Date.now()-swStartTs + swBase) : swBase, startedAt: swRunning ? swStartTs : null }
+    sw:{ running:swRunning, base:swRunning ? (Date.now()-swStartTs + swBase) : swBase, startedAt: swRunning ? swStartTs : null },
+    ptr, pendingRest, cd:{left:cdLeft,total:cdTotal,running:cdRunning}
   });
   function fill(d){
-    if(!d){ resetAll(); return; }
+    if(!d){ // frischer Tag
+      rounds = Array.from({length:5},()=>SW.map(sw=>({sw,pu:PU[sw],swDone:false,puDone:false})));
+      ptr={r:0,c:0,phase:'sw'}; pendingRest=null;
+      pauseShort=20; pauseLong=180;
+      swHardReset();
+      $$('.group.short .pbtn').forEach(x=>x.classList.remove('active'));
+      $$('.group.long  .pbtn').forEach(x=>x.classList.remove('active'));
+      document.querySelector('.group.short .pbtn[data-short="20"]')?.classList.add('active');
+      document.querySelector('.group.long  .pbtn[data-long="180"]')?.classList.add('active');
+      setCD(0,null);
+      update();
+      return;
+    }
     if(d.day) day.value=d.day;
     date.value=d.date||'';
+
     if(Array.isArray(d.rounds) && d.rounds.length===5){
       rounds=d.rounds.map(row=>row.map(b=>({sw:b.sw,pu:b.pu,swDone:!!b.swDone,puDone:!!b.puDone})));
     }
-    if(typeof d.pauseShort==='number') pauseShort=d.pauseShort;
-    if(typeof d.pauseLong==='number')  pauseLong=d.pauseLong;
-    // Pausen UI aktiv
-    $$('.group.short .pbtn').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.short,10)===pauseShort));
-    $$('.group.long  .pbtn').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.long,10)===pauseLong));
+    pauseShort = (typeof d.pauseShort==='number')? d.pauseShort : 20;
+    pauseLong  = (typeof d.pauseLong==='number') ? d.pauseLong  : 180;
 
-    // Stoppuhr wiederherstellen
+    // Stoppuhr
     if(d.sw){
       swBase = Math.max(0, parseInt(d.sw.base||0,10));
       swRunning = !!d.sw.running;
-      if(swRunning){
-        swStartTs = Date.now();
-        clearInterval(swTimer); swTimer=setInterval(swTick,1000);
-      }else{
-        swStartTs = null; clearInterval(swTimer); swTimer=null;
-      }
+      if(swRunning){ swStartTs = Date.now(); clearInterval(swTimer); swTimer=setInterval(swTick,1000); }
+      else { swStartTs=null; clearInterval(swTimer); swTimer=null; }
       swRender();
-    }else{
-      swHardReset();
-    }
+    }else swHardReset();
 
-    setCD(pauseShort,null);
+    // Pointer/Pause
+    if(d.ptr && ['sw','pu','rest'].includes(d.ptr.phase)){
+      ptr = { r: +d.ptr.r||0, c:+d.ptr.c||0, phase:d.ptr.phase };
+    } else { ptr = firstIncomplete(); }
+    pendingRest = (typeof d.pendingRest==='number') ? d.pendingRest : null;
+
+    // Countdown-Zustand (wir starten nie automatisch im Hintergrund)
+    if(d.cd && d.cd.running){ cdLeft=d.cd.left||0; cdTotal=d.cd.total||0; renderCD(); pauseCD(); }
+
+    $$('.group.short .pbtn').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.short,10)===pauseShort));
+    $$('.group.long  .pbtn').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.long,10)===pauseLong));
+
     update();
   }
   function save(){ safeSet(skey(), JSON.stringify(collect())); }
   function load(){
     const raw = safeGet(skey());
-    if(raw){ try{ fill(JSON.parse(raw)); }catch(e){ resetAll(); } }
-    else { resetAll(); } // kein Storage -> frischer Tag
+    if(raw){ try{ fill(JSON.parse(raw)); }catch(e){ fill(null); } }
+    else { fill(null); }
   }
   function autoSave(){ try{ save(); }catch(e){} }
 
@@ -515,7 +526,6 @@ canvas{display:block;width:100%;height:220px}
   function draw(data){
     if(!chart) return;
     const ctx = chart.getContext('2d');
-    // DPR
     const dpr = window.devicePixelRatio||1;
     const rect = chart.getBoundingClientRect();
     chart.width  = Math.max(600, Math.round(rect.width * dpr));
@@ -523,7 +533,6 @@ canvas{display:block;width:100%;height:220px}
     ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.clearRect(0,0,chart.clientWidth,chart.clientHeight);
 
-    // colors
     const ACCENT = getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#faff00';
     const LINE   = getComputedStyle(document.documentElement).getPropertyValue('--line')   || '#2a3340';
 
@@ -531,7 +540,6 @@ canvas{display:block;width:100%;height:220px}
     const padL=36, padR=12, padT=8, padB=24;
     const iw = W - padL - padR, ih = H - padT - padB;
 
-    // axes
     ctx.strokeStyle = LINE; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(padL,padT); ctx.lineTo(padL,padT+ih); ctx.lineTo(padL+iw,padT+ih); ctx.stroke();
 
@@ -550,22 +558,18 @@ canvas{display:block;width:100%;height:220px}
     const xAt = i=> padL + i*xStep;
     const yAt = ms=> { const t=(ms - yMin)/(yMax-yMin||1); return padT + ih - t*ih; };
 
-    // grid
     ctx.setLineDash([2,3]); ctx.strokeStyle = LINE;
     for(let g=0; g<=3; g++){ const y = padT + ih*(g/3); ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+iw,y); ctx.stroke(); }
     ctx.setLineDash([]);
 
-    // line
     ctx.strokeStyle = ACCENT; ctx.lineWidth=2;
     ctx.beginPath();
     data.forEach((d,i)=>{ const x=xAt(i), y=yAt(d.ms||0); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });
     ctx.stroke();
 
-    // points
     ctx.fillStyle = ACCENT;
     data.forEach((d,i)=>{ const x=xAt(i), y=yAt(d.ms||0); ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill(); });
 
-    // x labels sparsam
     ctx.fillStyle = '#8a93a1'; ctx.font='12px system-ui';
     const step = Math.max(1, Math.ceil(data.length/8));
     data.forEach((d,i)=>{ if(i%step===0 || i===data.length-1){ ctx.fillText('T'+d.day, xAt(i)-10, padT+ih+16); } });
@@ -601,9 +605,8 @@ canvas{display:block;width:100%;height:220px}
 
   // Init
   if(!day.value) day.value='1';
-  setCD(pauseShort,null);
+  setCD(0,null);
   load();
-  // Initialen Verlauf zeichnen
   progressRender();
 })();
 </script>
