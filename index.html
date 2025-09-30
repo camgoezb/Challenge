@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>10k Swings – Neon v5.2</title>
+<title>10k Swings – Neon v5.3</title>
 <style>
 :root{
   --bg:#0b0d10; --surface:#0f1318; --ink:#e5e7eb; --muted:#9aa3af;
@@ -89,6 +89,29 @@ canvas{display:block;width:100%;height:220px}
 .toggle{cursor:pointer;color:var(--accent);border:none;background:transparent;padding:6px 8px;border-radius:10px}
 .toggle:hover{background:color-mix(in srgb,var(--accent) 10%, transparent)}
 .stats{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:13px}
+
+/* Finish-Popup */
+.toast{
+  position:fixed; inset:0; display:none; place-items:center; z-index:50;
+  background:rgba(0,0,0,.35); backdrop-filter:saturate(120%) blur(4px);
+}
+.toast.show{ display:grid; animation:fade .18s ease-out }
+.toastCard{
+  background:var(--surface); border:1px solid var(--accent);
+  border-radius:20px; padding:18px 22px; text-align:center;
+  box-shadow:0 20px 60px rgba(250,255,0,.12);
+}
+.toastTime{
+  font-size: clamp(28px, 8vw, 56px);
+  font-weight: 900;
+  color: var(--accent);
+  letter-spacing: .02em;
+}
+.toastText{ color:var(--muted); margin-top:4px }
+@keyframes fade{
+  from{ opacity:0; transform: translateY(8px) }
+  to{ opacity:1; transform: translateY(0) }
+}
 </style>
 </head>
 <body>
@@ -177,6 +200,14 @@ canvas{display:block;width:100%;height:220px}
   </div>
 </div>
 
+<!-- Finish-Popup -->
+<div class="toast" id="finishToast" role="status" aria-live="polite">
+  <div class="toastCard">
+    <div class="toastTime" id="finishTime">00:00:00</div>
+    <div class="toastText">Gesamtzeit</div>
+  </div>
+</div>
+
 <script>
 (function(){
   'use strict';
@@ -198,7 +229,7 @@ canvas{display:block;width:100%;height:220px}
   /* Model */
   const SW=[10,15,25,50], PU={10:2,15:3,25:5,50:10}, TOTAL=500;
   let rounds = Array.from({length:5},()=>SW.map(sw=>({sw,pu:PU[sw],swDone:false,puDone:false})));
-  let ptr={r:0,c:0,phase:'sw'};   // 'sw' | 'pu' | 'rest'
+  let ptr={r:0,c:0,phase:'sw'};   // 'sw' | 'pu' | 'rest' | 'done'
   let pauseShort=20, pauseLong=180;
 
   /* Stoppuhr */
@@ -215,7 +246,7 @@ canvas{display:block;width:100%;height:220px}
   /* Countdown (Ring) */
   const arc = $('#arc'), CIRC = 2*Math.PI*104;
   let cdLeft=0, cdTotal=0, cdTimer=null, cdRunning=false, cdOnEnd=null;
-  let pendingRest=null; // Pausendauer, wenn 'rest' angezeigt, aber noch nicht gestartet
+  let pendingRest=null;
   const setProg = f => arc.style.strokeDashoffset = (CIRC*(1-Math.max(0,Math.min(1,f||0)))).toFixed(2);
   const renderCD = () => setProg(cdTotal ? (cdTotal-cdLeft)/cdTotal : 0);
   const fmt = sec => `${Math.floor(sec/60)}:${pad(sec%60)}`;
@@ -242,9 +273,7 @@ canvas{display:block;width:100%;height:220px}
       for(let c=0;c<4;c++){
         const b=rounds[r][c];
         if(!b.swDone) return {r,c,phase:'sw'};
-        // 50er-Blöcke überspringen „2.Übung“
         if(b.sw!==50 && !b.puDone) return {r,c,phase:'pu'};
-        // nach 50ern kommt immer Pause -> wird durch rest-Phase abgebildet
       }
     }
     return {r:4,c:3,phase:'rest'};
@@ -268,6 +297,7 @@ canvas{display:block;width:100%;height:220px}
 
   /* UI */
   function labelFor(p){
+    if(p.phase==='done') return 'Fertig';
     if(doneAll()) return 'Fertig!';
     if(p.phase==='sw')  return `${rounds[p.r][p.c].sw} Swings`;
     if(p.phase==='pu')  return `2.Übung`;
@@ -279,7 +309,7 @@ canvas{display:block;width:100%;height:220px}
     const sum = sumSw();
     $('#totalText').textContent = `${sum} / ${TOTAL}`;
     $('#prog').style.width = `${Math.min(100,(sum/TOTAL)*100)}%`;
-    if(!(ptr.phase==='rest' && !cdRunning)) ptr = firstIncomplete();
+    if(!(ptr.phase==='rest' && !cdRunning) && ptr.phase!=='done') ptr = firstIncomplete();
     $('#nextBtn').textContent = labelFor(ptr);
     swRender();
     progressRender();
@@ -306,20 +336,37 @@ canvas{display:block;width:100%;height:220px}
         const b=rounds[r][c];
         if(t==='sw'){
           b.swDone=!b.swDone;
-          if(b.sw===50){ b.puDone=b.swDone; } // 50er: PU spiegelt Swings
+          if(b.sw===50){ b.puDone=b.swDone; }
         }else{
           if(b.sw===50){ b.puDone=b.swDone; } else { b.puDone=!b.puDone; }
         }
         if(ptr.phase==='rest' && !cdRunning) pendingRest=null;
-        ptr = firstIncomplete();
+        if(ptr.phase==='done') ptr=firstIncomplete();
         update(); autoSave();
       });
     });
   }
 
-  /* Next-Button – exakter Flow */
+  /* Finish-Popup */
+  const toast = $('#finishToast'), toastTime = $('#finishTime');
+  function showFinishPopup(ms){
+    toastTime.textContent = fmtHMS(ms);
+    toast.classList.add('show');
+    setTimeout(()=>{ toast.classList.remove('show'); }, 2500);
+  }
+
+  /* Next-Button – Flow inkl. „Fertig“-Knopf am Ende */
   $('#nextBtn').addEventListener('click', ()=>{
     if(cdRunning) return;
+
+    // Fertig-Knopf gedrückt
+    if(ptr.phase==='done'){
+      // Stoppuhr sicher stoppen und Zeit zeigen
+      if(swRunning) swStop();
+      showFinishPopup(swBase);
+      update(); autoSave();
+      return;
+    }
 
     // erste Aktion -> Stoppuhr starten
     if(!swRunning){
@@ -334,13 +381,25 @@ canvas{display:block;width:100%;height:220px}
       b.swDone = true;
 
       if(b.sw===50){
-        // 50er: keine 2.Übung, danach immer LANG
+        // 50er: keine 2.Übung
         b.puDone = true;
-        pendingRest = pauseLong;
-        ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
-        $('#nextBtn').textContent = 'Pause starten';
-        autoSave(); update();
-        return;
+
+        if(isLastBlock(ptr.r, ptr.c)){
+          // letztes 50er -> KEINE Pause, direkt „Fertig“-Phase
+          pendingRest = null;
+          ptr = {r:ptr.r, c:ptr.c, phase:'done'};
+          $('#nextBtn').textContent = 'Fertig';
+          autoSave(); update();
+          return;
+        }else{
+          // 50er zwischendurch -> lange Pause möglich, aber durch die neue Regel:
+          // hier bleibt wie bisher: lange Pause nach 50er
+          pendingRest = pauseLong;
+          ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
+          $('#nextBtn').textContent = 'Pause starten';
+          autoSave(); update();
+          return;
+        }
       }else{
         // 10 / 15 / 25 -> 2.Übung
         ptr = {r:ptr.r, c:ptr.c, phase:'pu'};
@@ -352,8 +411,6 @@ canvas{display:block;width:100%;height:220px}
     // 2) 2.Übung (nur bei 10/15/25)
     if(ptr.phase==='pu'){
       b.puDone = true;
-
-      // kurze Pause
       pendingRest = pauseShort;
       ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
       $('#nextBtn').textContent = 'Pause starten';
@@ -364,13 +421,10 @@ canvas{display:block;width:100%;height:220px}
     // 3) Pause starten
     if(ptr.phase==='rest'){
       const rest = pendingRest || pauseShort;
-      const r=ptr.r, c=ptr.c; const was50 = rounds[r][c].sw===50; const wasLast = isLastBlock(r,c);
       $('#nextBtn').disabled = true;
       setCD(rest, ()=>{
         nextBlock();
         $('#nextBtn').disabled = false;
-        // Wenn letzte lange Pause nach letztem 50er endet -> Stoppuhr stoppen
-        if(was50 && wasLast){ swStop(); }
         update(); autoSave();
       });
       startCD();
@@ -379,21 +433,35 @@ canvas{display:block;width:100%;height:220px}
     }
   });
 
-  /* Skip: immer genau einen Schritt überspringen (als erledigt markieren) */
+  /* Skip: immer genau einen Schritt überspringen */
   $('#skipBtn').addEventListener('click', ()=>{
     if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; nextBlock(); update(); autoSave(); return; }
+
+    // Skip in „done“ -> einfach Finish anzeigen
+    if(ptr.phase==='done'){
+      if(swRunning) swStop();
+      showFinishPopup(swBase);
+      update(); autoSave();
+      return;
+    }
+
     const b = rounds[ptr.r][ptr.c];
 
     if(ptr.phase==='sw'){
       if(b.sw===50){
-        b.swDone=true; b.puDone=true; pendingRest=pauseLong; ptr.phase='rest';
+        b.swDone=true; b.puDone=true;
+        if(isLastBlock(ptr.r,ptr.c)){
+          // direkt in „done“
+          ptr.phase='done'; pendingRest=null;
+        }else{
+          pendingRest=pauseLong; ptr.phase='rest';
+        }
       }else{
         b.swDone=true; ptr.phase='pu';
       }
     }else if(ptr.phase==='pu'){
       b.puDone=true; pendingRest=pauseShort; ptr.phase='rest';
     }else if(ptr.phase==='rest'){
-      // Pause überspringen
       nextBlock();
     }
     update(); autoSave();
@@ -402,6 +470,13 @@ canvas{display:block;width:100%;height:220px}
   /* Zurück */
   $('#backBtn').addEventListener('click', ()=>{
     if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; }
+    // Wenn wir in „done“ stehen, gehe zum letzten 50er „sw“
+    if(ptr.phase==='done'){
+      ptr = {r:4, c:3, phase:'sw'};
+      rounds[4][3].swDone = false;
+      rounds[4][3].puDone = false;
+      update(); autoSave(); return;
+    }
     for(let r=4;r>=0;r--){
       for(let c=3;c>=0;c--){
         const b=rounds[r][c];
@@ -425,7 +500,7 @@ canvas{display:block;width:100%;height:220px}
   });
 
   /* Storage per Tag inkl. Stoppuhr */
-  const skey = ()=>'kb_neon_v5_2_day_'+(day.value||'X');
+  const skey = ()=>'kb_neon_v5_3_day_'+(day.value||'X');
   const collect = ()=>({
     day:day.value||'', date:date.value||'',
     rounds, pauseShort, pauseLong,
@@ -463,7 +538,7 @@ canvas{display:block;width:100%;height:220px}
       swRender();
     }else swHardReset();
 
-    if(d.ptr && ['sw','pu','rest'].includes(d.ptr.phase)){
+    if(d.ptr && ['sw','pu','rest','done'].includes(d.ptr.phase)){
       ptr = { r: +d.ptr.r||0, c:+d.ptr.c||0, phase:d.ptr.phase };
     } else { ptr = firstIncomplete(); }
     pendingRest = (typeof d.pendingRest==='number') ? d.pendingRest : null;
@@ -482,6 +557,7 @@ canvas{display:block;width:100%;height:220px}
 
   /* ====== Verlauf (integriert) ====== */
   const KEY_PREFIXES = [
+    'kb_neon_v5_3_day_',
     'kb_neon_v5_2_day_',
     'kb_neon_v5_1_day_',
     'kb_neon_v5_day_',
@@ -534,9 +610,10 @@ canvas{display:block;width:100%;height:220px}
     const n = parseInt(v,10);
     return data.slice(-n);
   }
-  function fmtMS(ms, unit='auto'){
-    if(unit==='sec') return (ms/1000).toFixed(0)+' s';
-    if(unit==='min') return (ms/60000).toFixed(2)+' min';
+  function fmtMS(ms){
+    const unitSel = document.getElementById('unit').value;
+    if(unitSel==='sec') return (ms/1000).toFixed(0)+' s';
+    if(unitSel==='min') return (ms/60000).toFixed(2)+' min';
     const t=Math.floor(ms/1000), h=Math.floor(t/3600), m=Math.floor((t%3600)/60), s=t%60;
     const pp = x=>x<10?'0'+x:x;
     return (h? (pp(h)+':'):'') + pp(m)+':'+pp(s);
@@ -605,35 +682,14 @@ canvas{display:block;width:100%;height:220px}
     const data = filterRange(gather());
     draw(data);
     const {best, avg, last} = computeStats(data);
-    statsEl.textContent = data.length
-      ? `Einträge: ${data.length} · Ø: ${best==null?'–':fmtMS(avg, unitSel.value)} · Best: ${best==null?'–':fmtMS(best, unitSel.value)} · Letzte: ${last==null?'–':fmtMS(last, unitSel.value)}`
+    document.getElementById('stats').textContent = data.length
+      ? `Einträge: ${data.length} · Ø: ${best==null?'–':fmtMS(avg)} · Best: ${best==null?'–':fmtMS(best)} · Letzte: ${last==null?'–':fmtMS(last)}`
       : 'Keine Einträge im gewählten Zeitraum';
   }
-  rangeSel.addEventListener('change', progressRender);
-  unitSel .addEventListener('change', progressRender);
-  window.addEventListener('resize', progressRender);
-  exportBtn.addEventListener('click', ()=>{
-    const data = filterRange(gather());
-    const rows = [['Tag','Datum','Zeit (ms)','Zeit (lesbar)','Status']];
-    data.forEach(d=> rows.push([d.day, d.date||'', d.ms||0, d.ms?fmtMS(d.ms,'auto'):'', d.done?'fertig':'offen']));
-    const csv = rows.map(r=>r.map(v=>String(v).replace(/"/g,'""')).map(v=>`"${v}"`).join(',')).join('\n');
-    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    const url  = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='zeiten.csv';
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  });
-  let open = true;
-  toggleBtn.addEventListener('click', ()=>{
-    open = !open;
-    progressBody.style.display = open ? 'block' : 'none';
-    toggleBtn.textContent = open ? '▼' : '▲';
-  });
-
-  // ===== Verlauf-Helfer =====
   function gather(){
     const map = new Map();
     for(let d=1; d<=50; d++){
-      const raw = safeGet('kb_neon_v5_2_day_'+d);
+      const raw = safeGet('kb_neon_v5_3_day_'+d) || safeGet('kb_neon_v5_2_day_'+d);
       if(!raw) continue;
       try{
         const rec = JSON.parse(raw);
@@ -650,20 +706,6 @@ canvas{display:block;width:100%;height:220px}
       }catch(e){}
     }
     return Array.from(map.values()).sort((a,b)=>a.day-b.day);
-  }
-  function filterRange(data){
-    const v = document.getElementById('range').value;
-    if(v==='all') return data;
-    const n = parseInt(v,10);
-    return data.slice(-n);
-  }
-  function fmtMS(ms){
-    const unitSel = document.getElementById('unit').value;
-    if(unitSel==='sec') return (ms/1000).toFixed(0)+' s';
-    if(unitSel==='min') return (ms/60000).toFixed(2)+' min';
-    const t=Math.floor(ms/1000), h=Math.floor(t/3600), m=Math.floor((t%3600)/60), s=t%60;
-    const pp = x=>x<10?'0'+x:x;
-    return (h? (pp(h)+':'):'') + pp(m)+':'+pp(s);
   }
 
   // Init
