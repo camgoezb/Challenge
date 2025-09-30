@@ -38,7 +38,7 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
 .sw-time{font-variant-numeric:tabular-nums;letter-spacing:.02em}
 .sw-btn{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:12px;padding:6px 10px;cursor:pointer}
 
-/* Layout: links (lang) | Mitte (Kreis) | rechts (kurz) – auch mobil nebeneinander */
+/* Layout */
 .dialWrap{display:grid;grid-template-columns:var(--side) var(--dial) var(--side);gap:12px;align-items:center;justify-content:center}
 
 /* Dial + Button */
@@ -46,7 +46,6 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
 .dial svg{position:absolute;inset:0;transform:rotate(-90deg);z-index:1;pointer-events:none;color:var(--accent)}
 .ring-bg{stroke:color-mix(in srgb,var(--accent) 12%,#11161c)}
 #arc{transition:stroke-dashoffset .2s linear}
-
 .bigBtn{
   position:relative;z-index:3;width:var(--btn);height:var(--btn);border:none;border-radius:50%;
   background:var(--accent);color:#0b0d10;font-weight:800;font-size:clamp(16px,3.6vw,18px);
@@ -80,7 +79,7 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
 .btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:14px;padding:10px 14px;min-height:var(--tap);cursor:pointer}
 .btn:hover{border-color:var(--line-strong)}
 
-/* Verlauf-Karte */
+/* Verlauf */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px;display:grid;gap:10px}
 .topline{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
 .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -104,7 +103,7 @@ canvas{display:block;width:100%;height:220px}
   </div>
 </div>
 
-<!-- Links (lang) | Kreis | Rechts (kurz) -->
+<!-- Links | Kreis | Rechts -->
 <div class="dialWrap">
   <div class="side left">
     <div class="group long">
@@ -151,7 +150,7 @@ canvas{display:block;width:100%;height:220px}
 <!-- Board -->
 <div class="board" id="board"></div>
 
-<!-- Verlauf integriert -->
+<!-- Verlauf -->
 <div class="card" id="progressCard">
   <div class="topline">
     <div class="small">Verlauf (Gesamtzeit pro Tag)</div>
@@ -242,13 +241,15 @@ canvas{display:block;width:100%;height:220px}
       for(let c=0;c<4;c++){
         const b=rounds[r][c];
         if(!b.swDone) return {r,c,phase:'sw'};
-        if(!b.puDone) return {r,c,phase:'pu'};
+        // NEU: 50er-Blöcke überspringen „2.Übung“
+        if(b.sw!==50 && !b.puDone) return {r,c,phase:'pu'};
       }
     }
     return {r:4,c:3,phase:'rest'};
   }
+  function isLastBlock(r,c){ return (r===4 && c===3); }
   function nextBlock(){ if(ptr.c<3) ptr.c++; else { ptr.c=0; ptr.r=Math.min(4,ptr.r+1); } ptr.phase='sw'; pendingRest=null; }
-  const doneAll = () => sumSw()>=TOTAL && rounds.flat().every(b=>b.puDone);
+  const doneAll = () => sumSw()>=TOTAL && rounds.flat().every(b=> (b.sw===50 ? b.swDone : b.puDone)); // 50er brauchen keine 2.Übung
 
   /* Pausen-Auswahl */
   $$('.group.short .pbtn').forEach(b=>b.addEventListener('click',()=>{
@@ -266,7 +267,10 @@ canvas{display:block;width:100%;height:220px}
   /* UI */
   function labelFor(p){
     if(doneAll()) return 'Fertig!';
-    if(p.phase==='sw')  return `${rounds[p.r][p.c].sw} Swings`;
+    if(p.phase==='sw'){
+      const b=rounds[p.r][p.c];
+      return `${b.sw} Swings`;
+    }
     if(p.phase==='pu')  return `2.Übung`;
     if(p.phase==='rest')return cdRunning ? `Pause ${fmt(cdLeft)}` : 'Pause starten';
     return 'Weiter';
@@ -276,11 +280,10 @@ canvas{display:block;width:100%;height:220px}
     const sum = sumSw();
     $('#totalText').textContent = `${sum} / ${TOTAL}`;
     $('#prog').style.width = `${Math.min(100,(sum/TOTAL)*100)}%`;
-    // ptr nur neu bestimmen, wenn keine „wartende“ Pause ansteht
     if(!(ptr.phase==='rest' && !cdRunning)) ptr = firstIncomplete();
     $('#nextBtn').textContent = labelFor(ptr);
     swRender();
-    progressRender(); // Verlauf aktualisieren
+    progressRender();
   }
 
   /* Board */
@@ -293,7 +296,7 @@ canvas{display:block;width:100%;height:220px}
         const cell=document.createElement('div'); cell.className='cell';
         cell.innerHTML = `
           <button class="big ${b.swDone?'done':''}" data-r="${r}" data-c="${c}" data-t="sw">${b.sw}</button>
-          <button class="dot ${b.puDone?'done':''}" data-r="${r}" data-c="${c}" data-t="pu" title="2.Übung"></button>`;
+          <button class="dot ${b.puDone?'done':''}" data-r="${r}" data-c="${c}" data-t="pu" title="${b.sw===50?'(übersprungen)':'2.Übung'}"></button>`;
         row.appendChild(cell);
       });
       board.appendChild(row);
@@ -301,9 +304,19 @@ canvas{display:block;width:100%;height:220px}
     $$('#board .big, #board .dot').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const r=+btn.dataset.r, c=+btn.dataset.c, t=btn.dataset.t;
-        if(t==='sw') rounds[r][c].swDone=!rounds[r][c].swDone;
-        else rounds[r][c].puDone=!rounds[r][c].puDone;
-        // Wenn Board manuell ändert, evtl. wartende Pause löschen
+        const b=rounds[r][c];
+        if(t==='sw'){
+          b.swDone=!b.swDone;
+          if(b.sw===50 && !b.swDone){ b.puDone=false; } // konsistent zurücksetzen
+          if(b.sw===50 && b.swDone){ b.puDone=true; }   // konsistent setzen
+        }else{
+          if(b.sw===50){
+            // 50er haben keine 2.Übung -> Dot spiegelt nur „auto“
+            b.puDone = b.swDone; // an Swings koppeln
+          }else{
+            b.puDone=!b.puDone;
+          }
+        }
         if(ptr.phase==='rest' && !cdRunning) pendingRest=null;
         ptr = firstIncomplete();
         update(); autoSave();
@@ -311,46 +324,68 @@ canvas{display:block;width:100%;height:220px}
     });
   }
 
-  /* Next-Button – 3-Klick-Flow + Stoppuhr-Start/Stop */
+  /* Next-Button – Flow mit 50er-Sonderlogik */
   $('#nextBtn').addEventListener('click', ()=>{
     if(cdRunning) return;
 
-    // Erste Aktion -> Stoppuhr starten, falls noch gar nichts gemacht
+    // Erste Aktion -> Stoppuhr starten
     if(!swRunning){
       const anyDone = rounds.flat().some(b=>b.swDone||b.puDone);
       if(!anyDone) swStart();
     }
 
-    // 1) Swings erledigen -> auf 2.Übung umschalten
+    const b = rounds[ptr.r][ptr.c];
+
+    // 1) Swings
     if(ptr.phase==='sw'){
-      const b = rounds[ptr.r][ptr.c];
       b.swDone = true;
-      ptr = {r:ptr.r, c:ptr.c, phase:'pu'};
-      update(); autoSave();
-      return;
+
+      if(b.sw===50){
+        // 50er: keine 2.Übung
+        b.puDone = true; // auto
+        if(isLastBlock(ptr.r, ptr.c)){
+          // Letzter 50er: keine Pause, Training Ende
+          swStop();
+          pendingRest=null;
+          update(); autoSave();
+          return;
+        }else{
+          // Zwischen-50er: direkt Pause (lang)
+          pendingRest = pauseLong;
+          ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
+          $('#nextBtn').textContent = 'Pause starten';
+          autoSave(); update();
+          return;
+        }
+      }else{
+        // normale Blöcke: weiter zur 2.Übung
+        ptr = {r:ptr.r, c:ptr.c, phase:'pu'};
+        update(); autoSave();
+        return;
+      }
     }
 
-    // 2) 2.Übung erledigen -> „Pause starten“ zeigen (noch nicht laufen)
+    // 2) 2.Übung (nur wenn nicht 50er)
     if(ptr.phase==='pu'){
-      const b = rounds[ptr.r][ptr.c];
       b.puDone = true;
 
-      // Fertig? -> Stoppuhr stoppen, kein Pause mehr
+      // fertig?
       if(doneAll()){
         swStop();
-        pendingRest=null;
         update(); autoSave();
         return;
       }
 
-      pendingRest = (b.pu === 10) ? pauseLong : pauseShort;
+      // Pause: lang NUR nach 10 PU (also 50er – kommt hier nie), sonst kurz
+      const rest = pauseShort;
+      pendingRest = rest;
       ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
       $('#nextBtn').textContent = 'Pause starten';
       autoSave();
       return;
     }
 
-    // 3) Pause starten -> Countdown im Ring, Button gesperrt
+    // 3) Pause starten
     if(ptr.phase==='rest'){
       const rest = pendingRest || pauseShort;
       $('#nextBtn').disabled = true;
@@ -371,18 +406,42 @@ canvas{display:block;width:100%;height:220px}
     for(let r=4;r>=0;r--){
       for(let c=3;c>=0;c--){
         const b=rounds[r][c];
-        if(b.puDone){ b.puDone=false; pendingRest=null; ptr={r,c,phase:'pu'}; update(); autoSave(); return; }
-        if(b.swDone){ b.swDone=false; pendingRest=null; ptr={r,c,phase:'sw'}; update(); autoSave(); return; }
+        if(b.sw===50){
+          // spezielle Rücknahme: 50er haben keine 2.Übung
+          if(b.swDone){
+            b.swDone=false; b.puDone=false; pendingRest=null; ptr={r,c,phase:'sw'}; update(); autoSave(); return;
+          }
+        }else{
+          if(b.puDone){ b.puDone=false; pendingRest=null; ptr={r,c,phase:'pu'}; update(); autoSave(); return; }
+          if(b.swDone){ b.swDone=false; pendingRest=null; ptr={r,c,phase:'sw'}; update(); autoSave(); return; }
+        }
       }
     }
   });
+
   $('#skipBtn').addEventListener('click', ()=>{
     if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; }
-    if(ptr.phase==='sw') ptr.phase='pu';
-    else if(ptr.phase==='pu'){ const b=rounds[ptr.r][ptr.c]; b.puDone=true; pendingRest=(b.pu===10)?pauseLong:pauseShort; ptr.phase='rest'; }
-    else { nextBlock(); }
+    const b = rounds[ptr.r][ptr.c];
+
+    if(ptr.phase==='sw'){
+      if(b.sw===50){
+        // 50er: Swings als erledigt markieren und direkt Pause (lang)
+        b.swDone=true; b.puDone=true;
+        if(isLastBlock(ptr.r,ptr.c)){
+          swStop(); update(); autoSave(); return;
+        }
+        pendingRest=pauseLong; ptr.phase='rest';
+      }else{
+        ptr.phase='pu';
+      }
+    }else if(ptr.phase==='pu'){
+      b.puDone=true; pendingRest=pauseShort; ptr.phase='rest';
+    }else{
+      nextBlock();
+    }
     update(); autoSave();
   });
+
   $('#resetRoundBtn').addEventListener('click', ()=>{
     const p=firstIncomplete(), r=p.r;
     rounds[r].forEach(b=>{ b.swDone=false; b.puDone=false; });
@@ -431,17 +490,12 @@ canvas{display:block;width:100%;height:220px}
       swRender();
     }else swHardReset();
 
-    // Pointer/Pause
     if(d.ptr && ['sw','pu','rest'].includes(d.ptr.phase)){
       ptr = { r: +d.ptr.r||0, c:+d.ptr.c||0, phase:d.ptr.phase };
     } else { ptr = firstIncomplete(); }
     pendingRest = (typeof d.pendingRest==='number') ? d.pendingRest : null;
 
-    // Countdown-Zustand (wir starten nie automatisch im Hintergrund)
     if(d.cd && d.cd.running){ cdLeft=d.cd.left||0; cdTotal=d.cd.total||0; renderCD(); pauseCD(); }
-
-    $$('.group.short .pbtn').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.short,10)===pauseShort));
-    $$('.group.long  .pbtn').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.long,10)===pauseLong));
 
     update();
   }
@@ -453,7 +507,7 @@ canvas{display:block;width:100%;height:220px}
   }
   function autoSave(){ try{ save(); }catch(e){} }
 
-  // ====== Verlauf (integriert) ======
+  /* ====== Verlauf (integriert) ====== */
   const KEY_PREFIXES = [
     'kb_neon_v5_2_day_',
     'kb_neon_v5_1_day_',
@@ -484,7 +538,8 @@ canvas{display:block;width:100%;height:220px}
       if (Array.isArray(d.rounds) && d.rounds.length===5){
         const all = d.rounds.flat();
         const sumSw = all.filter(b=>b && b.swDone).reduce((a,b)=>a+(b.sw||0),0);
-        const allPu = all.every(b=>b && b.puDone===true);
+        // 50er zählen ohne PU
+        const allPu = all.every(b=> b ? (b.sw===50 ? b.swDone : b.puDone===true) : false);
         done = (sumSw>=500 && allPu);
       }
       const date = d.date || '';
@@ -582,6 +637,7 @@ canvas{display:block;width:100%;height:220px}
       ? `Einträge: ${data.length} · Ø: ${best==null?'–':fmtMS(avg, unitSel.value)} · Best: ${best==null?'–':fmtMS(best, unitSel.value)} · Letzte: ${last==null?'–':fmtMS(last, unitSel.value)}`
       : 'Keine Einträge im gewählten Zeitraum';
   }
+
   rangeSel.addEventListener('change', progressRender);
   unitSel .addEventListener('change', progressRender);
   window.addEventListener('resize', progressRender);
@@ -595,13 +651,49 @@ canvas{display:block;width:100%;height:220px}
     const a = document.createElement('a'); a.href=url; a.download='zeiten.csv';
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   });
-  // Ein-/Ausklappen
   let open = true;
   toggleBtn.addEventListener('click', ()=>{
     open = !open;
     progressBody.style.display = open ? 'block' : 'none';
     toggleBtn.textContent = open ? '▼' : '▲';
   });
+
+  // ===== Verlauf-Helfer =====
+  function gather(){
+    const map = new Map();
+    for(let d=1; d<=50; d++){
+      const raw = safeGet('kb_neon_v5_2_day_'+d);
+      if(!raw) continue;
+      try{
+        const rec = JSON.parse(raw);
+        let ms = 0;
+        if (rec.sw && typeof rec.sw.base === 'number') ms = Math.max(0, rec.sw.base|0);
+        let done = false;
+        if (Array.isArray(rec.rounds) && rec.rounds.length===5){
+          const all = rec.rounds.flat();
+          const sumSw = all.filter(b=>b && b.swDone).reduce((a,b)=>a+(b.sw||0),0);
+          const allPu = all.every(b=> b ? (b.sw===50 ? b.swDone : b.puDone===true) : false);
+          done = (sumSw>=500 && allPu);
+        }
+        map.set(d, {day:d, date:rec.date||'', ms, done});
+      }catch(e){}
+    }
+    return Array.from(map.values()).sort((a,b)=>a.day-b.day);
+  }
+  function filterRange(data){
+    const v = document.getElementById('range').value;
+    if(v==='all') return data;
+    const n = parseInt(v,10);
+    return data.slice(-n);
+  }
+  function fmtMS(ms, unit='auto'){
+    const unitSel = document.getElementById('unit').value;
+    if(unitSel==='sec') return (ms/1000).toFixed(0)+' s';
+    if(unitSel==='min') return (ms/60000).toFixed(2)+' min';
+    const t=Math.floor(ms/1000), h=Math.floor(t/3600), m=Math.floor((t%3600)/60), s=t%60;
+    const pp = x=>x<10?'0'+x:x;
+    return (h? (pp(h)+':'):'') + pp(m)+':'+pp(s);
+  }
 
   // Init
   if(!day.value) day.value='1';
