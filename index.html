@@ -46,6 +46,7 @@ select:focus,input:focus,button:focus{outline:2px solid var(--accent);outline-of
 .dial svg{position:absolute;inset:0;transform:rotate(-90deg);z-index:1;pointer-events:none;color:var(--accent)}
 .ring-bg{stroke:color-mix(in srgb,var(--accent) 12%,#11161c)}
 #arc{transition:stroke-dashoffset .2s linear}
+
 .bigBtn{
   position:relative;z-index:3;width:var(--btn);height:var(--btn);border:none;border-radius:50%;
   background:var(--accent);color:#0b0d10;font-weight:800;font-size:clamp(16px,3.6vw,18px);
@@ -241,15 +242,16 @@ canvas{display:block;width:100%;height:220px}
       for(let c=0;c<4;c++){
         const b=rounds[r][c];
         if(!b.swDone) return {r,c,phase:'sw'};
-        // NEU: 50er-Blöcke überspringen „2.Übung“
+        // 50er-Blöcke überspringen „2.Übung“
         if(b.sw!==50 && !b.puDone) return {r,c,phase:'pu'};
+        // nach 50ern kommt immer Pause -> wird durch rest-Phase abgebildet
       }
     }
     return {r:4,c:3,phase:'rest'};
   }
-  function isLastBlock(r,c){ return (r===4 && c===3); }
+  const isLastBlock = (r,c)=> (r===4 && c===3);
   function nextBlock(){ if(ptr.c<3) ptr.c++; else { ptr.c=0; ptr.r=Math.min(4,ptr.r+1); } ptr.phase='sw'; pendingRest=null; }
-  const doneAll = () => sumSw()>=TOTAL && rounds.flat().every(b=> (b.sw===50 ? b.swDone : b.puDone)); // 50er brauchen keine 2.Übung
+  const doneAll = () => sumSw()>=TOTAL && rounds.flat().every(b=> (b.sw===50 ? b.swDone : b.puDone));
 
   /* Pausen-Auswahl */
   $$('.group.short .pbtn').forEach(b=>b.addEventListener('click',()=>{
@@ -267,10 +269,7 @@ canvas{display:block;width:100%;height:220px}
   /* UI */
   function labelFor(p){
     if(doneAll()) return 'Fertig!';
-    if(p.phase==='sw'){
-      const b=rounds[p.r][p.c];
-      return `${b.sw} Swings`;
-    }
+    if(p.phase==='sw')  return `${rounds[p.r][p.c].sw} Swings`;
     if(p.phase==='pu')  return `2.Übung`;
     if(p.phase==='rest')return cdRunning ? `Pause ${fmt(cdLeft)}` : 'Pause starten';
     return 'Weiter';
@@ -296,7 +295,7 @@ canvas{display:block;width:100%;height:220px}
         const cell=document.createElement('div'); cell.className='cell';
         cell.innerHTML = `
           <button class="big ${b.swDone?'done':''}" data-r="${r}" data-c="${c}" data-t="sw">${b.sw}</button>
-          <button class="dot ${b.puDone?'done':''}" data-r="${r}" data-c="${c}" data-t="pu" title="${b.sw===50?'(übersprungen)':'2.Übung'}"></button>`;
+          <button class="dot ${b.puDone?'done':''}" data-r="${r}" data-c="${c}" data-t="pu" title="${b.sw===50?'(keine 2.Übung)':'2.Übung'}"></button>`;
         row.appendChild(cell);
       });
       board.appendChild(row);
@@ -307,15 +306,9 @@ canvas{display:block;width:100%;height:220px}
         const b=rounds[r][c];
         if(t==='sw'){
           b.swDone=!b.swDone;
-          if(b.sw===50 && !b.swDone){ b.puDone=false; } // konsistent zurücksetzen
-          if(b.sw===50 && b.swDone){ b.puDone=true; }   // konsistent setzen
+          if(b.sw===50){ b.puDone=b.swDone; } // 50er: PU spiegelt Swings
         }else{
-          if(b.sw===50){
-            // 50er haben keine 2.Übung -> Dot spiegelt nur „auto“
-            b.puDone = b.swDone; // an Swings koppeln
-          }else{
-            b.puDone=!b.puDone;
-          }
+          if(b.sw===50){ b.puDone=b.swDone; } else { b.puDone=!b.puDone; }
         }
         if(ptr.phase==='rest' && !cdRunning) pendingRest=null;
         ptr = firstIncomplete();
@@ -324,11 +317,11 @@ canvas{display:block;width:100%;height:220px}
     });
   }
 
-  /* Next-Button – Flow mit 50er-Sonderlogik */
+  /* Next-Button – exakter Flow */
   $('#nextBtn').addEventListener('click', ()=>{
     if(cdRunning) return;
 
-    // Erste Aktion -> Stoppuhr starten
+    // erste Aktion -> Stoppuhr starten
     if(!swRunning){
       const anyDone = rounds.flat().some(b=>b.swDone||b.puDone);
       if(!anyDone) swStart();
@@ -341,44 +334,27 @@ canvas{display:block;width:100%;height:220px}
       b.swDone = true;
 
       if(b.sw===50){
-        // 50er: keine 2.Übung
-        b.puDone = true; // auto
-        if(isLastBlock(ptr.r, ptr.c)){
-          // Letzter 50er: keine Pause, Training Ende
-          swStop();
-          pendingRest=null;
-          update(); autoSave();
-          return;
-        }else{
-          // Zwischen-50er: direkt Pause (lang)
-          pendingRest = pauseLong;
-          ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
-          $('#nextBtn').textContent = 'Pause starten';
-          autoSave(); update();
-          return;
-        }
+        // 50er: keine 2.Übung, danach immer LANG
+        b.puDone = true;
+        pendingRest = pauseLong;
+        ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
+        $('#nextBtn').textContent = 'Pause starten';
+        autoSave(); update();
+        return;
       }else{
-        // normale Blöcke: weiter zur 2.Übung
+        // 10 / 15 / 25 -> 2.Übung
         ptr = {r:ptr.r, c:ptr.c, phase:'pu'};
         update(); autoSave();
         return;
       }
     }
 
-    // 2) 2.Übung (nur wenn nicht 50er)
+    // 2) 2.Übung (nur bei 10/15/25)
     if(ptr.phase==='pu'){
       b.puDone = true;
 
-      // fertig?
-      if(doneAll()){
-        swStop();
-        update(); autoSave();
-        return;
-      }
-
-      // Pause: lang NUR nach 10 PU (also 50er – kommt hier nie), sonst kurz
-      const rest = pauseShort;
-      pendingRest = rest;
+      // kurze Pause
+      pendingRest = pauseShort;
       ptr = {r:ptr.r, c:ptr.c, phase:'rest'};
       $('#nextBtn').textContent = 'Pause starten';
       autoSave();
@@ -388,10 +364,13 @@ canvas{display:block;width:100%;height:220px}
     // 3) Pause starten
     if(ptr.phase==='rest'){
       const rest = pendingRest || pauseShort;
+      const r=ptr.r, c=ptr.c; const was50 = rounds[r][c].sw===50; const wasLast = isLastBlock(r,c);
       $('#nextBtn').disabled = true;
       setCD(rest, ()=>{
         nextBlock();
         $('#nextBtn').disabled = false;
+        // Wenn letzte lange Pause nach letztem 50er endet -> Stoppuhr stoppen
+        if(was50 && wasLast){ swStop(); }
         update(); autoSave();
       });
       startCD();
@@ -400,17 +379,34 @@ canvas{display:block;width:100%;height:220px}
     }
   });
 
-  /* Navigation */
+  /* Skip: immer genau einen Schritt überspringen (als erledigt markieren) */
+  $('#skipBtn').addEventListener('click', ()=>{
+    if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; nextBlock(); update(); autoSave(); return; }
+    const b = rounds[ptr.r][ptr.c];
+
+    if(ptr.phase==='sw'){
+      if(b.sw===50){
+        b.swDone=true; b.puDone=true; pendingRest=pauseLong; ptr.phase='rest';
+      }else{
+        b.swDone=true; ptr.phase='pu';
+      }
+    }else if(ptr.phase==='pu'){
+      b.puDone=true; pendingRest=pauseShort; ptr.phase='rest';
+    }else if(ptr.phase==='rest'){
+      // Pause überspringen
+      nextBlock();
+    }
+    update(); autoSave();
+  });
+
+  /* Zurück */
   $('#backBtn').addEventListener('click', ()=>{
     if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; }
     for(let r=4;r>=0;r--){
       for(let c=3;c>=0;c--){
         const b=rounds[r][c];
         if(b.sw===50){
-          // spezielle Rücknahme: 50er haben keine 2.Übung
-          if(b.swDone){
-            b.swDone=false; b.puDone=false; pendingRest=null; ptr={r,c,phase:'sw'}; update(); autoSave(); return;
-          }
+          if(b.swDone){ b.swDone=false; b.puDone=false; pendingRest=null; ptr={r,c,phase:'sw'}; update(); autoSave(); return; }
         }else{
           if(b.puDone){ b.puDone=false; pendingRest=null; ptr={r,c,phase:'pu'}; update(); autoSave(); return; }
           if(b.swDone){ b.swDone=false; pendingRest=null; ptr={r,c,phase:'sw'}; update(); autoSave(); return; }
@@ -419,29 +415,7 @@ canvas{display:block;width:100%;height:220px}
     }
   });
 
-  $('#skipBtn').addEventListener('click', ()=>{
-    if(cdRunning){ pauseCD(); $('#nextBtn').disabled=false; }
-    const b = rounds[ptr.r][ptr.c];
-
-    if(ptr.phase==='sw'){
-      if(b.sw===50){
-        // 50er: Swings als erledigt markieren und direkt Pause (lang)
-        b.swDone=true; b.puDone=true;
-        if(isLastBlock(ptr.r,ptr.c)){
-          swStop(); update(); autoSave(); return;
-        }
-        pendingRest=pauseLong; ptr.phase='rest';
-      }else{
-        ptr.phase='pu';
-      }
-    }else if(ptr.phase==='pu'){
-      b.puDone=true; pendingRest=pauseShort; ptr.phase='rest';
-    }else{
-      nextBlock();
-    }
-    update(); autoSave();
-  });
-
+  /* Runde zurücksetzen */
   $('#resetRoundBtn').addEventListener('click', ()=>{
     const p=firstIncomplete(), r=p.r;
     rounds[r].forEach(b=>{ b.swDone=false; b.puDone=false; });
@@ -459,7 +433,7 @@ canvas{display:block;width:100%;height:220px}
     ptr, pendingRest, cd:{left:cdLeft,total:cdTotal,running:cdRunning}
   });
   function fill(d){
-    if(!d){ // frischer Tag
+    if(!d){ // frisch
       rounds = Array.from({length:5},()=>SW.map(sw=>({sw,pu:PU[sw],swDone:false,puDone:false})));
       ptr={r:0,c:0,phase:'sw'}; pendingRest=null;
       pauseShort=20; pauseLong=180;
@@ -481,7 +455,6 @@ canvas{display:block;width:100%;height:220px}
     pauseShort = (typeof d.pauseShort==='number')? d.pauseShort : 20;
     pauseLong  = (typeof d.pauseLong==='number') ? d.pauseLong  : 180;
 
-    // Stoppuhr
     if(d.sw){
       swBase = Math.max(0, parseInt(d.sw.base||0,10));
       swRunning = !!d.sw.running;
@@ -538,7 +511,6 @@ canvas{display:block;width:100%;height:220px}
       if (Array.isArray(d.rounds) && d.rounds.length===5){
         const all = d.rounds.flat();
         const sumSw = all.filter(b=>b && b.swDone).reduce((a,b)=>a+(b.sw||0),0);
-        // 50er zählen ohne PU
         const allPu = all.every(b=> b ? (b.sw===50 ? b.swDone : b.puDone===true) : false);
         done = (sumSw>=500 && allPu);
       }
@@ -637,7 +609,6 @@ canvas{display:block;width:100%;height:220px}
       ? `Einträge: ${data.length} · Ø: ${best==null?'–':fmtMS(avg, unitSel.value)} · Best: ${best==null?'–':fmtMS(best, unitSel.value)} · Letzte: ${last==null?'–':fmtMS(last, unitSel.value)}`
       : 'Keine Einträge im gewählten Zeitraum';
   }
-
   rangeSel.addEventListener('change', progressRender);
   unitSel .addEventListener('change', progressRender);
   window.addEventListener('resize', progressRender);
@@ -686,7 +657,7 @@ canvas{display:block;width:100%;height:220px}
     const n = parseInt(v,10);
     return data.slice(-n);
   }
-  function fmtMS(ms, unit='auto'){
+  function fmtMS(ms){
     const unitSel = document.getElementById('unit').value;
     if(unitSel==='sec') return (ms/1000).toFixed(0)+' s';
     if(unitSel==='min') return (ms/60000).toFixed(2)+' min';
